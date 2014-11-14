@@ -54,8 +54,10 @@ my $verifycert=$Config{"verifycert"};
 my $mode=$Config{"mode"};
 my $script=$Config{"script"};
 my $cfgpass=$Config{"password"};
+my $cfgpass2=$Config{"password2"};
 my $workdir=$Config{"workdir"};
 my $password="";
+my $password2="";
 my $hostchecker=$Config{"hostchecker"};
 my $tncc_pid = 0;
 
@@ -86,6 +88,15 @@ if(defined $cfgpass){
 }
 else { $cfgpass="interactive"; }
 
+# check secondary password method
+if(defined $cfgpass2){
+	if($cfgpass2 !~ /^(interactive|helper:|plaintext:)/) {
+		print "Configuration error: password is set incorrectly ($cfgpass2), check jvpn.ini\n";
+		exit 1;
+	}
+}
+else { $cfgpass2="interactive"; }
+
 # set host checker mode
 $hostchecker=0 if !defined($mode);
 # set default url if needed
@@ -109,7 +120,7 @@ if( $> != 0 && !$is_setuid) {
 }
 
 my $ua = LWP::UserAgent->new;
-# on RHEL6 ssl_opts is not exists
+# on RHEL6 ssl_opts is not exists (Change verifycert to 0 to disable hostchecking - Not recommended)
 if(defined &LWP::UserAgent::ssl_opts) {
     $ua->ssl_opts('verify_hostname' => $verifycert);
 }
@@ -139,7 +150,7 @@ if (!defined($username) || $username eq "" || $username eq "interactive") {
 }
 
 if ($cfgpass eq "interactive") {
-	print "Enter PIN+password: ";
+	print "Enter Primary LAN Password: ";
 	$password=read_input("password");
 	print "\n";
 }
@@ -153,14 +164,32 @@ elsif ($cfgpass =~ /^helper:(.+)/) {
 	$password=run_pw_helper($1);
 }
 
+# Secondary password confiditional
+
+if ($cfgpass2 eq "interactive") {
+	print "Enter PIN + RSA Token Number: ";
+	$password2=read_input("password");
+	print "\n";
+}
+elsif ($cfgpass2 =~ /^plaintext:(.+)/) {
+	print "Using user-defined password\n";
+	$password2=$1;
+	chomp($password2);
+}
+elsif ($cfgpass2 =~ /^helper:(.+)/) {
+	print "Using user-defined script to get the password\n";
+	$password2=run_pw_helper($1);
+}
+
 my $response_body = '';
 
 my $res = $ua->post("https://$dhost:$dport/dana-na/auth/$durl/login.cgi",
 	[ btnSubmit   => 'Sign In',
+	username  => $username,
 	password  => $password,
+	'password#2'  => $password2,
 	realm => $realm,
 	tz   => '60',
-	username  => $username,
 	]);
 
 $response_body=$res->decoded_content;
@@ -187,24 +216,26 @@ if ($res->is_success) {
 		}
 		# if password was specified in plaintext we should not use it 
 		# here, it will not work anyway
-		elsif ($cfgpass eq "interactive" || $cfgpass =~ /^plaintext:/) {
+
+		elsif ($cfgpass2 eq "interactive" || $cfgpass2 =~ /^plaintext:/) {
 			print "To continue, wait for the token code to change and ".
 			"then enter the new pin and code.\n";
-			print "Enter PIN+password: ";
-			$password=read_password();
+			print "Enter PIN + RSA Tocken Number: ";
+			$password2=read_password();
 			print "\n";
 		}
-		elsif ($cfgpass =~ /^helper:(.+)/) {
+		elsif ($cfgpass2 =~ /^helper:(.+)/) {
 			print "Using user-defined script to get second password\n";
 			# set current password to the OLDPIN variable to make 
 			# helper aware that we need a new key
-			$ENV{'OLDPIN'}=$password;
-			$password=run_pw_helper($1);
+			$ENV{'OLDPIN'}=$password2;
+			$password2=run_pw_helper($1);
 			delete $ENV{'OLDPIN'}; 
 		}
 		$res = $ua->post("https://$dhost:$dport/dana-na/auth/$durl/login.cgi",
 			[ Enter   => 'secidactionEnter',
 			password  => $password,
+			'password#2' => $password2,
 			key  => $key,
 			]);
 		$response_body=$res->decoded_content;
